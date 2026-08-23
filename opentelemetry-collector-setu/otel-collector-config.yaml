@@ -1,0 +1,79 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    send_batch_size: 1024
+    send_batch_max_size: 2048
+    timeout: 5s
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+  resource:
+    attributes:
+      - key: collector.source
+        value: otel-collector
+        action: upsert
+  tail_sampling:
+    policies:
+      - name: errors-and-slow
+        type: and
+        and:
+          and_sub_policy:
+            - name: error-policy
+              type: status_code
+              status_code:
+                status_codes:
+                  - ERROR
+            - name: slow-policy
+              type: latency
+              latency:
+                threshold_ms: 1000
+      - name: keep-all
+        type: always_sample
+
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    namespace: otel
+    const_labels:
+      collector: otel-collector
+  loki:
+    endpoint: http://loki:3100/loki/api/v1/push
+    default_labels_enabled:
+      exporter: false
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+  logging:
+    loglevel: warn
+
+service:
+  pipelines:
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [prometheus, logging]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch, resource]
+      exporters: [loki, logging]
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, tail_sampling, batch, resource]
+      exporters: [otlp/jaeger, logging]
+
+  extensions: [health_check, pprof]
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  pprof:
+    endpoint: 0.0.0.0:1777
